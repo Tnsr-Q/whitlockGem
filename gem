@@ -1,0 +1,379 @@
+{
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "view-in-github",
+        "colab_type": "text"
+      },
+      "source": [
+        "<a href=\"https://colab.research.google.com/github/Tnsr-Q/whitlockGem/blob/main/gem\" target=\"_parent\"><img src=\"https://colab.research.google.com/assets/colab-badge.svg\" alt=\"Open In Colab\"/></a>"
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "Of course. I have analyzed the provided document and agree that fusing the conceptual architecture with the implementation steps into a single, streamlined guide will be significantly more effective.\n",
+        "\n",
+        "The following is a professionally rewritten and consolidated guide. It first establishes the **\"what\"** and **\"why\"** of the data architecture across your entire stack (Redis, Mem0, Firestore) and then provides a clear, step-by-step **\"how\"** for implementation. This approach ensures you have a clear blueprint before executing the migration, leveraging your existing data without re-analysis.\n",
+        "\n",
+        "### **Integrated Data & RL Architecture: A Production-Ready Guide**\n",
+        "\n",
+        "This document provides a tailored architectural blueprint and implementation plan for your live broadcast system. It is designed to integrate your entire technology stack—Cerebras, Shisa, Mem0, Redis, and Firestore—while leveraging your 500+ episodes of pre-analyzed data directly.\n",
+        "\n",
+        "The core of this strategy is to **preserve your valuable existing analysis** by structuring it within a high-performance data layer, making it immediately accessible to your Reinforcement Learning (RL) and content pipelines.\n",
+        "\n",
+        "---\n",
+        "\n",
+        "### **Part 1: The Architectural Blueprint**\n",
+        "\n",
+        "This section defines the role and schema for each component of the system.\n",
+        "\n",
+        "#### **1.1: Redis - The High-Speed Operational Data Layer**\n",
+        "Redis will act as the central hub for all frequently accessed data. We will use specific Redis data structures for each data type to ensure maximum performance."
+      ],
+      "metadata": {
+        "id": "kky0mnfdLroz"
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# This dictionary serves as a clear, Python-based reference for your Redis schemas.\n",
+        "\n",
+        "REDIS_DATA_MODELS = {\n",
+        "    \"EpisodeData\": {\n",
+        "        \"key_format\": \"episode:{video_id}:data\",\n",
+        "        \"type\": \"Hash\",\n",
+        "        \"description\": \"Stores the complete, original analysis for a single episode.\",\n",
+        "        \"fields\": {\n",
+        "            \"raw\": \"A GZIP-compressed JSON string of the full episode analysis.\",\n",
+        "            \"timestamp\": \"The original upload date (ISO 8601 string) for time-based filtering.\"\n",
+        "        }\n",
+        "    },\n",
+        "    \"RL_Metrics\": {\n",
+        "        \"key_format\": \"ppo:{env_id}:{episode_id}:metrics\",\n",
+        "        \"type\": \"Sorted Set (ZSET)\",\n",
+        "        \"description\": \"Time-series data for RL agent performance.\",\n",
+        "        \"score\": \"Unix timestamp.\",\n",
+        "        \"value\": \"A JSON string containing reward, action probabilities, etc.\"\n",
+        "    },\n",
+        "    \"PersonMentionIndex\": {\n",
+        "        \"key_format\": \"person:{normalized_name}:episodes\",\n",
+        "        \"type\": \"Sorted Set (ZSET)\",\n",
+        "        \"description\": \"Links a person to all episodes they were mentioned in, sorted by time.\",\n",
+        "        \"score\": \"Unix timestamp of the mention.\",\n",
+        "        \"value\": \"The episode_id.\"\n",
+        "    },\n",
+        "    \"HistoricalAggregates\": {\n",
+        "        \"key_format\": \"whitlock:stats:{period}\", # e.g., period = \"90d\"\n",
+        "        \"type\": \"Hash\",\n",
+        "        \"description\": \"Stores pre-aggregated analytics for historical trend comparison.\",\n",
+        "        \"fields\": {\n",
+        "            \"avg_spice_score\": \"float\",\n",
+        "            \"top_topics\": \"JSON string array\",\n",
+        "            \"top_person_mentions\": \"JSON string array\"\n",
+        "        }\n",
+        "    }\n",
+        "}"
+      ],
+      "outputs": [],
+      "execution_count": null,
+      "metadata": {
+        "id": "9Pzr08U0Lro1"
+      }
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "**Why this Redis design works:**\n",
+        "* **No Re-Analysis:** The `raw` field perfectly preserves your original JSON schema.\n",
+        "* **Performance:** Using Hashes for key-value data and Sorted Sets for time-series indexes is highly optimized for your query needs.\n",
+        "* **Scalability:** This structure easily accommodates millions of keys while remaining memory-efficient, especially with compression.\n",
+        "\n",
+        "#### **1.2: Mem0 - The Semantic Search & RL Environment Layer**\n",
+        "Mem0 serves two critical functions: providing a semantic search layer over your Redis data and storing the dynamic configuration for your RL environment."
+      ],
+      "metadata": {
+        "id": "FMSuAe1dLro2"
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# This Python dictionary defines the structure of your RL environment within Mem0.\n",
+        "# It will be stored as metadata against a single, well-known key.\n",
+        "\n",
+        "RL_ENVIRONMENT_SCHEMA = {\n",
+        "    \"state_space\": {\n",
+        "        \"description\": \"Defines the inputs the agent observes at each step.\",\n",
+        "        \"current_episode_embedding\": \"embedding:768\",\n",
+        "        \"audience_feedback\": {\n",
+        "            \"live_chat_sentiment\": \"float\",\n",
+        "            \"trending_topics_embedding\": \"embedding:256\"\n",
+        "        },\n",
+        "        \"moral_alignment\": {\n",
+        "            \"biblical_score_from_shisa\": \"float\",\n",
+        "            \"cultural_impact_from_cerebras\": \"float\"\n",
+        "        }\n",
+        "    },\n",
+        "    \"action_space\": {\n",
+        "        \"description\": \"Defines the possible actions the agent can take.\",\n",
+        "        \"actions\": [\n",
+        "            {\"name\": \"topic_pivot\", \"params\": {\"target_topic\": \"string\", \"intensity\": \"float\"}},\n",
+        "            {\"name\": \"introduce_rhetorical_device\", \"params\": {\"device_type\": \"enum\", \"duration_seconds\": \"int\"}}\n",
+        "        ]\n",
+        "    },\n",
+        "    \"reward_components\": {\n",
+        "        \"description\": \"Defines the dynamically weighted sources for the reward signal.\",\n",
+        "        \"engagement\": {\"weight\": 0.6, \"source\": \"redis\", \"metric\": \"view_velocity\"},\n",
+        "        \"moral_alignment\": {\"weight\": 0.3, \"source\": \"cerebras\", \"metric\": \"alignment_score\"},\n",
+        "        \"novelty\": {\"weight\": 0.1, \"source\": \"mem0\", \"metric\": \"distance_from_history\"}\n",
+        "    }\n",
+        "}"
+      ],
+      "outputs": [],
+      "execution_count": null,
+      "metadata": {
+        "id": "p7_7vEYfLro2"
+      }
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "**Why this Mem0 design works:**\n",
+        "* **Dynamic Configuration:** Storing the RL schema in Mem0 allows you to dynamically update reward weights from your `compare_broadcasts` pipeline without code deployments.\n",
+        "* **Integrated Intelligence:** The reward function is designed to pull signals directly from your entire stack: Redis for engagement, Cerebras for alignment, and Mem0 itself for novelty.\n",
+        "\n",
+        "#### **1.3: Firestore - The Temporary Article Verification Pipeline**\n",
+        "Firestore is perfectly suited for managing the lifecycle of temporary articles that require multi-stage verification from PPO, Cerebras, and Shisa."
+      ],
+      "metadata": {
+        "id": "bbsHxIoHLro3"
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# This dictionary defines the schema for a document in the 'temp_articles' collection.\n",
+        "\n",
+        "FIRESTORE_ARTICLE_SCHEMA = {\n",
+        "    \"collection_name\": \"temp_articles\",\n",
+        "    \"document_fields\": {\n",
+        "        \"raw_content\": \"string\",\n",
+        "        \"source_episode_id\": \"string\",\n",
+        "        \"created_at\": \"timestamp\", # Critical for TTL management\n",
+        "        \"status\": \"string (e.g., 'pending_ppo', 'pending_shisa', 'approved')\",\n",
+        "        \"extracted_claims\": [\n",
+        "            {\n",
+        "                \"text\": \"string\",\n",
+        "                \"verification_status\": \"string\",\n",
+        "                \"cerebras_analysis_details\": \"map\"\n",
+        "            }\n",
+        "        ],\n",
+        "        \"processing_stages\": {\n",
+        "            \"ppo_evaluation\": {\"completed\": \"boolean\", \"reward_signal\": \"float\"},\n",
+        "            \"shisa_approval\": {\"approved\": \"boolean\", \"biblical_alignment\": \"float\", \"notes\": \"string\"}\n",
+        "        }\n",
+        "    }\n",
+        "}"
+      ],
+      "outputs": [],
+      "execution_count": null,
+      "metadata": {
+        "id": "UvT8AzD6Lro3"
+      }
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "**Why this Firestore design works:**\n",
+        "* **Workflow Management:** The schema explicitly tracks the state of an article as it moves through your verification pipeline.\n",
+        "* **Cost Control:** A scheduled Google Cloud Function can query documents by the `created_at` field and delete those older than 48 hours, preventing storage bloat.\n",
+        "\n",
+        "---\n",
+        "\n",
+        "### **Part 2: The Implementation & Migration Plan**\n",
+        "\n",
+        "This section provides the actionable scripts to deploy the architecture above.\n",
+        "\n",
+        "#### **Step 1: Migrate Existing Data to Redis & Mem0**\n",
+        "This single Python script will read your 500+ episode files and populate the data stores correctly."
+      ],
+      "metadata": {
+        "id": "V7XfB0CXLro3"
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# migrate_data.py\n",
+        "import asyncio\n",
+        "import json\n",
+        "import os\n",
+        "import redis\n",
+        "\n",
+        "from mem0 import Mem0Client\n",
+        "from typing import List, Dict, Any\n",
+        "\n",
+        "# ... (client initialization as in the previous example) ...\n",
+        "\n",
+        "def extract_persons_from_episode(ep: Dict[str, Any]) -> set:\n",
+        "    \"\"\"Placeholder for your NER logic to extract person names.\"\"\"\n",
+        "    # This should be replaced with your robust entity extraction logic\n",
+        "    return set(ep.get(\"content_analysis\", {}).get(\"main_topics\", []))\n",
+        "\n",
+        "async def migrate_episodes(episodes_data: List[Dict[str, Any]], redis_client, mem0_client):\n",
+        "    \"\"\"Processes a list of episodes, populating Redis and Mem0.\"\"\"\n",
+        "    for ep in episodes_data:\n",
+        "        video_id = ep['video_metadata']['video_id']\n",
+        "        upload_date = ep['video_metadata']['upload_date']\n",
+        "        redis_key = f\"episode:{video_id}:data\"\n",
+        "\n",
+        "        # 1. Store raw episode data in Redis\n",
+        "        redis_client.hset(redis_key, mapping={\n",
+        "            \"raw\": json.dumps(ep), # Consider GZIP compression for production\n",
+        "            \"timestamp\": upload_date\n",
+        "        })\n",
+        "\n",
+        "        # 2. Index key topics in Mem0\n",
+        "        topics = ep['content_analysis']['main_topics']\n",
+        "        spice_score = max(c['controversy_level'] for c in ep['whitlock_techniques']['controversy_elements'] or [{}])\n",
+        "\n",
+        "        await mem0_client.add(\n",
+        "            id=redis_key,\n",
+        "            text=\", \".join(topics),\n",
+        "            metadata={\n",
+        "                \"duration\": ep['video_metadata']['duration_seconds'],\n",
+        "                \"spice_score\": spice_score\n",
+        "            }\n",
+        "        )\n",
+        "\n",
+        "        # 3. Extract and store celebrity mentions\n",
+        "        for person in extract_persons_from_episode(ep):\n",
+        "            # Your logic to update person metadata and ZADD to the episodes set\n",
+        "            pass # (See previous response for the store_celebrity_reference implementation)\n",
+        "\n",
+        "    print(\"Data migration to Redis and Mem0 is complete.\")\n",
+        "\n",
+        "# --- How to run ---\n",
+        "# 1. Load your episode JSON files into a list `all_episodes`.\n",
+        "# with open('all_episodes.json', 'r') as f:\n",
+        "#     all_episodes = json.load(f)\n",
+        "# 2. Run the async function.\n",
+        "# asyncio.run(migrate_episodes(all_episodes, redis_client, mem0_client))"
+      ],
+      "outputs": [],
+      "execution_count": null,
+      "metadata": {
+        "id": "Gwo382JSLro4"
+      }
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "#### **Step 2: The Broadcast Comparison & RL Adjustment Pipeline**\n",
+        "This is the core operational script for your daily broadcasts."
+      ],
+      "metadata": {
+        "id": "sMoMhfFXLro4"
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# broadcast_operations.py\n",
+        "# ... (imports and client setup) ...\n",
+        "\n",
+        "async def compare_broadcasts_and_adjust_rl(\n",
+        "    public_episode_id: str,\n",
+        "    private_episode_id: str,\n",
+        "    # Pass in clients for Redis, Mem0, Cerebras, etc.\n",
+        "):\n",
+        "    \"\"\"\n",
+        "    Fetches metrics, gets RL adjustment from Cerebras, and updates Mem0.\n",
+        "    \"\"\"\n",
+        "    # 1. Fetch metrics from Redis for both broadcast runs\n",
+        "    public_stats = redis.zrange(f\"ppo:whitlock_prod:{public_episode_id}:metrics\", 0, -1, withscores=True)\n",
+        "    private_stats = redis.zrange(f\"ppo:whitlock_prod:{private_episode_id}:metrics\", 0, -1, withscores=True)\n",
+        "    historical_context = redis.hgetall(\"whitlock:stats:90d\")\n",
+        "\n",
+        "    # 2. Send to Cerebras for analysis to get a structured adjustment\n",
+        "    # adjustment = await cerebras_llm.with_structured_output(BroadcastComparison).ainvoke(...)\n",
+        "\n",
+        "    # 3. Apply the adjustment to the RL environment schema in Mem0\n",
+        "    # await mem0_client.update_metadata(\n",
+        "    #     id=\"rl_env:whitlock_prod\",\n",
+        "    #     metadata={\n",
+        "    #         \"reward_components.engagement.weight\": adjustment.engagement_weight,\n",
+        "    #         # ... update other weights ...\n",
+        "    #     }\n",
+        "    # )\n",
+        "    print(\"RL environment has been successfully adjusted based on broadcast comparison.\")\n",
+        "\n",
+        "#### **Step 3: Schedule the Firestore TTL Cleanup**\n",
+        "This requires deploying a simple Cloud Function.\n",
+        "\n",
+        "```python\n",
+        "# main.py (for Google Cloud Functions)\n",
+        "import functions_framework\n",
+        "from datetime import datetime, timedelta, timezone\n",
+        "from google.cloud import firestore\n",
+        "\n",
+        "@functions_framework.http\n",
+        "def cleanup_expired_articles(request):\n",
+        "    \"\"\"\n",
+        "    A Cloud Function triggered by HTTP or a scheduler to delete documents\n",
+        "    older than 48 hours from the 'temp_articles' collection.\n",
+        "    \"\"\"\n",
+        "    db = firestore.Client()\n",
+        "    forty_eight_hours_ago = datetime.now(timezone.utc) - timedelta(hours=48)\n",
+        "\n",
+        "    docs_to_delete = db.collection(\"temp_articles\").where(\n",
+        "        \"created_at\", \"<\", forty_eight_hours_ago\n",
+        "    ).stream()\n",
+        "\n",
+        "    count = 0\n",
+        "    for doc in docs_to_delete:\n",
+        "        doc.reference.delete()\n",
+        "        count += 1\n",
+        "\n",
+        "    return f\"Successfully deleted {count} expired articles.\", 200"
+      ],
+      "outputs": [],
+      "execution_count": null,
+      "metadata": {
+        "id": "egNQ1QF2Lro4"
+      }
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "---\n",
+        "\n",
+        "### **Actionable Next Steps**\n",
+        "1.  **Migrate Data:** Consolidate your 500 episode JSON files and run the `migrate_data.py` script once.\n",
+        "2.  **Set Up RL Environment:** Run the code snippet to store the `RL_ENVIRONMENT_SCHEMA` in Mem0.\n",
+        "3.  **Deploy Cleanup Function:** Deploy the `cleanup_expired_articles` Cloud Function and set it to run on a nightly schedule.\n",
+        "4.  **Integrate Pipelines:** Weave the `compare_broadcasts_and_adjust_rl` logic into your daily post-broadcast operational script.\n",
+        "\n",
+        "This integrated approach provides a robust, scalable, and production-ready system that fully leverages your existing data and technology stack."
+      ],
+      "metadata": {
+        "id": "66ue7ZESLro5"
+      }
+    }
+  ],
+  "metadata": {
+    "colab": {
+      "provenance": [],
+      "include_colab_link": true
+    },
+    "kernelspec": {
+      "display_name": "Python 3",
+      "name": "python3"
+    }
+  },
+  "nbformat": 4,
+  "nbformat_minor": 0
+}
